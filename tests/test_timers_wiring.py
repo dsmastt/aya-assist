@@ -1,7 +1,7 @@
 """Tests for the timer tool wiring: registry, scheduler drain, CLI command.
 
-Covers the plumbing added around ``tasks.timer_*``: the ``timer_set`` /
-``timer_status`` / ``timer_cancel`` registry entries in ``builtin``, the
+Covers the plumbing added around ``tasks.timer_*``: the merged ``timer``
+registry entry (actions set/status/cancel) in ``builtin``, the
 ``ReminderScheduler`` timer drain + notification path, and the ``/timers``
 slash command. No GPU, no model load.
 """
@@ -29,41 +29,42 @@ def run(coro):
 
 
 class TimerToolRegistrationTest(unittest.TestCase):
-    def test_timer_tools_registered_in_tasks_category(self):
-        for name in ("timer_set", "timer_status", "timer_cancel"):
-            entry = TOOLS.get(name)
-            self.assertIsNotNone(entry, f"{name} not registered")
-            self.assertEqual(entry.category, "tasks")
+    def test_timer_tool_registered_in_tasks_category(self):
+        entry = TOOLS.get("timer")
+        self.assertIsNotNone(entry, "timer not registered")
+        self.assertEqual(entry.category, "tasks")
 
     def test_timer_set_schema(self):
         schema = {
             f["function"]["name"]: f["function"]
             for f in TOOLS.openai_schemas()
-        }["timer_set"]
-        self.assertIn("stopwatch", schema["description"])
+        }["timer"]
+        self.assertIn("countdown timer", schema["description"])
         props = schema["parameters"]["properties"]
+        self.assertEqual(props["action"]["enum"], ["set", "status", "cancel"])
         self.assertEqual(props["label"]["type"], "string")
-        self.assertEqual(props["label"]["default"], "timer")
         self.assertEqual(props["duration"]["type"], "string")
-        self.assertEqual(schema["parameters"]["required"], ["duration"])
+        self.assertEqual(schema["parameters"]["required"], ["action"])
 
-    def test_timer_status_schema_has_no_params(self):
+    def test_timer_status_schema_requires_only_action(self):
         schema = {
             f["function"]["name"]: f["function"]
             for f in TOOLS.openai_schemas()
-        }["timer_status"]
-        self.assertEqual(schema["parameters"]["properties"], {})
-        self.assertNotIn("required", schema["parameters"])
+        }["timer"]
+        props = schema["parameters"]["properties"]
+        self.assertIn("status", props["action"]["enum"])
+        required = schema["parameters"].get("required", [])
+        self.assertEqual(required, ["action"])
 
     def test_timer_cancel_schema(self):
         schema = {
             f["function"]["name"]: f["function"]
             for f in TOOLS.openai_schemas()
-        }["timer_cancel"]
+        }["timer"]
         self.assertEqual(
             schema["parameters"]["properties"]["timer_id"]["type"], "integer"
         )
-        self.assertNotIn("required", schema["parameters"])
+        self.assertNotIn("timer_id", schema["parameters"].get("required", []))
 
 
 class TimerToolInvocationTest(unittest.TestCase):
@@ -78,13 +79,15 @@ class TimerToolInvocationTest(unittest.TestCase):
 
     def test_timer_round_trip_through_registry(self):
         result = run(
-            TOOLS.get("timer_set").run(self.ctx, {"label": "tea", "duration": "90s"})
+            TOOLS.get("timer").run(
+                self.ctx, {"action": "set", "label": "tea", "duration": "90s"}
+            )
         )
         self.assertTrue(result.ok)
         self.assertEqual(result.data["label"], "tea")
         self.assertEqual(result.data["duration_seconds"], 90)
 
-        status = run(TOOLS.get("timer_status").run(self.ctx, {}))
+        status = run(TOOLS.get("timer").run(self.ctx, {"action": "status"}))
         self.assertTrue(status.ok)
         timers = status.data["timers"]
         self.assertEqual(len(timers), 1)
@@ -92,18 +95,22 @@ class TimerToolInvocationTest(unittest.TestCase):
         self.assertEqual(timers[0]["status"], "running")
 
         cancelled = run(
-            TOOLS.get("timer_cancel").run(self.ctx, {"timer_id": timers[0]["id"]})
+            TOOLS.get("timer").run(
+                self.ctx, {"action": "cancel", "timer_id": timers[0]["id"]}
+            )
         )
         self.assertTrue(cancelled.ok)
         self.assertEqual(cancelled.data, {"cancelled": timers[0]["id"]})
 
-        after = run(TOOLS.get("timer_status").run(self.ctx, {}))
+        after = run(TOOLS.get("timer").run(self.ctx, {"action": "status"}))
         self.assertEqual(after.data["timers"], [])
 
     def test_timer_set_requires_duration(self):
-        result = run(TOOLS.get("timer_set").run(self.ctx, {"label": "x"}))
+        result = run(
+            TOOLS.get("timer").run(self.ctx, {"action": "set", "label": "x"})
+        )
         self.assertTrue(result.ok)
-        self.assertEqual(result.data, {"error": "duration is required"})
+        self.assertEqual(result.data, {"error": "action 'set' requires duration"})
 
 
 class _NullConsole:

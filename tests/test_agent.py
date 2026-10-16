@@ -122,15 +122,25 @@ class _AgentBase(unittest.TestCase):
 
 class AgentRunOnceTest(_AgentBase):
     def test_tools_registered(self):
-        for name in (
-            "run_shell",
-            "system_status",
-            "memory_delete",
-            "todo_add",
-            "reminder_list",
-            "play_video",
-        ):
-            self.assertIn(name, TOOLS.names())
+        self.assertEqual(
+            sorted(TOOLS.names()),
+            sorted(
+                [
+                    "launch",
+                    "memory",
+                    "notify",
+                    "reminder",
+                    "run_shell",
+                    "start_project",
+                    "system_status",
+                    "timer",
+                    "todo",
+                    "video",
+                    "web",
+                    "workspace",
+                ]
+            ),
+        )
 
     def test_tool_round_then_final_answer(self):
         agent, engine, console, session = self._agent(
@@ -187,13 +197,20 @@ class AgentRunOnceTest(_AgentBase):
         self.assertEqual(shaped["id"], "1")
 
     def test_denied_approval_yields_denied_tool_result(self):
+        # memory is auto-approved by default; drop it so the approval path
+        # is exercised through the merged memory tool.
+        self.cfg.safety.auto_approve_categories.remove("memory")
         agent, engine, console, session = self._agent(
             [
                 {
                     "role": "assistant",
                     "content": "",
                     "tool_calls": [
-                        {"id": "1", "name": "memory_delete", "arguments": {"fact_id": 999}}
+                        {
+                            "id": "1",
+                            "name": "memory",
+                            "arguments": {"action": "delete", "fact_id": 999},
+                        }
                     ],
                 },
                 {
@@ -222,7 +239,7 @@ class AgentRunOnceTest(_AgentBase):
                     "role": "assistant",
                     "content": (
                         "I did not set a timer — I can only answer questions, "
-                        "so use timer_set if you want one."
+                        "so use the timer tool if you want one."
                     ),
                     "tool_calls": [],
                 },
@@ -238,13 +255,13 @@ class AgentRunOnceTest(_AgentBase):
         ]
         self.assertTrue(audit_msgs, "expected an audit message in round two")
         self.assertTrue(console.streams, "expected the retraction to be streamed")
-        self.assertIn("timer_set", "".join(console.streams))
+        self.assertIn("timer", "".join(console.streams))
         persisted = self.store.recent_messages(session.session_id, 10)
         self.assertEqual(
             [m["content"] for m in persisted],
             ["set a stopwatch of 20 minutes",
              "I did not set a timer — I can only answer questions, "
-             "so use timer_set if you want one."],
+             "so use the timer tool if you want one."],
         )
 
 
@@ -267,14 +284,22 @@ class AgentRunOnceTest(_AgentBase):
                     "tool_calls": [
                         {
                             "id": "2",
-                            "name": "timer_set",
-                            "arguments": {"label": "test", "duration": "1m"},
+                            "name": "timer",
+                            "arguments": {
+                                "action": "set",
+                                "label": "test",
+                                "duration": "1m",
+                            },
                         }
                     ],
                 },
                 {
+                    # The closing answer avoids re-claiming the timer action:
+                    # the audit tables (agent.py) map "set" to the merged
+                    # timer tool, so a timer-confirming sentence would
+                    # trigger a spurious third audit round.
                     "role": "assistant",
-                    "content": "The timer is set.",
+                    "content": "Done.",
                     "tool_calls": [],
                 },
             ]
@@ -289,14 +314,14 @@ class AgentRunOnceTest(_AgentBase):
             if m.get("role") == "user" and "[audit]" in m.get("content", "")
         }
         self.assertEqual(len(audit_msgs), 2)
-        self.assertTrue(any("play_video" in m for m in audit_msgs))
+        self.assertTrue(any("video" in m for m in audit_msgs))
         self.assertTrue(any("AGAIN claimed" in m for m in audit_msgs))
         self.assertTrue(
-            any("timer_set" in line for line in console.tool_lines),
+            any("timer" in line for line in console.tool_lines),
             "expected the round-two tool call to execute",
         )
         persisted = self.store.recent_messages(session.session_id, 10)
-        self.assertEqual(persisted[-1]["content"], "The timer is set.")
+        self.assertEqual(persisted[-1]["content"], "Done.")
 
     def test_exhausted_audit_rounds_warns_and_saves(self):
         agent, engine, console, session = self._agent(
@@ -357,12 +382,21 @@ class LooksLikeActionClaimTest(unittest.TestCase):
 
 class ClaimToolHintTest(unittest.TestCase):
     def test_missing_family_tools_listed(self):
-        hints = _claim_tool_hint("Playing lofi now", ["find_video"])
-        self.assertIn("play_video", hints)
-        self.assertIn("ani_play", hints)
+        hints = _claim_tool_hint("Playing lofi now", [("web", "search")])
+        self.assertTrue(any("video" in h for h in hints))
+        for hint in hints:
+            self.assertNotIn("play_video", hint)
 
     def test_called_family_tool_gives_no_hint(self):
-        self.assertEqual(_claim_tool_hint("Playing lofi now", ["play_video"]), [])
+        self.assertEqual(
+            _claim_tool_hint("Playing lofi now", [("video", "play")]), []
+        )
+
+    def test_search_action_alone_still_flags_play_claim(self):
+        self.assertEqual(
+            _claim_tool_hint("Playing lofi now", [("video", "search")]),
+            ["video (action: play)"],
+        )
 
     def test_question_and_negation_guards(self):
         self.assertEqual(_claim_tool_hint("Which one would you like?", []), [])
@@ -372,15 +406,15 @@ class ClaimToolHintTest(unittest.TestCase):
 class ClaimsUnsupportedActionTest(unittest.TestCase):
     def test_true_when_claimed_verb_has_no_matching_tool(self):
         for text, called in (
-            ("Playing some lofi in the background", ["find_video"]),
-            ("Opening the project", ["find_video"]),
+            ("Playing some lofi in the background", [("web", "search")]),
+            ("Opening the project", [("web", "search")]),
         ):
             self.assertTrue(_claims_unsupported_action(text, called), text)
 
     def test_false_when_matching_tool_was_called(self):
         for text, called in (
-            ("Playing some lofi", ["play_video"]),
-            ("Opening the project", ["open_project"]),
+            ("Playing some lofi", [("video", "play")]),
+            ("Opening the project", [("launch", "project")]),
         ):
             self.assertFalse(_claims_unsupported_action(text, called), text)
 

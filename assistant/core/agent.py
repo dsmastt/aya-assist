@@ -87,43 +87,58 @@ _TIME_CLAIM_RE = re.compile(
 )
 
 
-_CLAIM_VERB_TOOLS = {
-    "play": {"play_video", "ani_play"},
-    "playing": {"play_video", "ani_play"},
-    "played": {"play_video", "ani_play"},
-    "playback": {"play_video", "ani_play"},
-    "stream": {"play_video", "ani_play"},
-    "streaming": {"play_video", "ani_play"},
-    "starting": {"play_video", "ani_play"},
-    "open": {"open_url", "open_app", "open_path", "open_project", "play_video"},
-    "opening": {"open_url", "open_app", "open_path", "open_project", "play_video"},
-    "opened": {"open_url", "open_app", "open_path", "open_project", "play_video"},
-    "launch": {"open_url", "open_app", "open_path", "open_project", "play_video"},
-    "launching": {"open_url", "open_app", "open_path", "open_project", "play_video"},
-    "launched": {"open_url", "open_app", "open_path", "open_project", "play_video"},
-    "set": {"timer_set", "reminder_add", "reminder_cancel"},
-    "setting": {"timer_set", "reminder_add", "reminder_cancel"},
-    "scheduled": {"timer_set", "reminder_add", "reminder_cancel"},
-    "notified": {"timer_set", "reminder_add", "reminder_cancel"},
-    "you'll be notified": {"timer_set", "reminder_add", "reminder_cancel"},
-    "switch": {"move_window", "focus_workspace", "organize_workspaces"},
-    "switched": {"move_window", "focus_workspace", "organize_workspaces"},
-    "move": {"move_window", "focus_workspace", "organize_workspaces"},
-    "moved": {"move_window", "focus_workspace", "organize_workspaces"},
-    "checking": {"system_status", "hypr_workspaces", "hypr_clients", "timer_status"},
-    "checked": {"system_status", "hypr_workspaces", "hypr_clients", "timer_status"},
-    "check": {"system_status", "hypr_workspaces", "hypr_clients", "timer_status"},
-    "system status": {"system_status", "hypr_workspaces", "hypr_clients", "timer_status"},
-}
+#: Action verbs -> the action-aware proof each family needs.
+#: Families: play/stream/starting -> video with a real play call (a search
+#: alone is not enough); open/launch -> launch with the action the claim
+#: implies (url for sites, app for apps, project/path for projects);
+#: set/schedule -> the timer set/status/cancel mapping; move/switch ->
+#: workspace; check/status -> system_status/workspace/timer. Families whose
+#: tools carry no action keep the name-level check.
+_PLAY_VERBS = (
+    "play",
+    "playing",
+    "played",
+    "playback",
+    "stream",
+    "streaming",
+    "starting",
+)
+_OPEN_VERBS = (
+    "open",
+    "opening",
+    "opened",
+    "launch",
+    "launching",
+    "launched",
+)
+_SET_VERBS = ("set", "setting", "scheduled")
+_NOTIFY_VERBS = ("notified", "you'll be notified")
+_MOVE_VERBS = ("switch", "switched", "move", "moved")
+_CHECK_VERBS = ("checking", "checked", "check", "system status")
 
-_CLAIM_VERB_RES = {
-    verb: (
+
+def _verb_res(verbs: tuple[str, ...]) -> list[re.Pattern]:
+    """Compiled regexes for a verb family (word boundary + light suffixes)."""
+    return [
         re.compile(rf"\b{verb}(?:s|ed|ing|d)?\b", re.IGNORECASE)
         if re.fullmatch(r"[a-z]+", verb)
         else re.compile(re.escape(verb), re.IGNORECASE)
-    )
-    for verb in _CLAIM_VERB_TOOLS
-}
+        for verb in verbs
+    ]
+
+
+_PLAY_VERB_RES = _verb_res(_PLAY_VERBS)
+_OPEN_VERB_RES = _verb_res(_OPEN_VERBS)
+_SET_VERB_RES = _verb_res(_SET_VERBS)
+_NOTIFY_VERB_RES = _verb_res(_NOTIFY_VERBS)
+_MOVE_VERB_RES = _verb_res(_MOVE_VERBS)
+_CHECK_VERB_RES = _verb_res(_CHECK_VERBS)
+
+#: (tool, action) pairs proving a play claim: an actual video play (or
+#: anime) call — ``video search`` alone never proves playback.
+_VIDEO_PLAY_ACTIONS = {("video", "play"), ("video", "anime")}
+#: (tool, action) pairs proving an "opened the project/folder" claim.
+_LAUNCH_PROJECT_ACTIONS = {("launch", "project"), ("launch", "path")}
 
 _SITE_KEYWORDS = [
     "youtube",
@@ -134,6 +149,7 @@ _SITE_KEYWORDS = [
     "website",
     "web page",
     "url",
+    "site",
     "github",
     "reddit",
     "netflix",
@@ -147,22 +163,70 @@ _SITE_KEYWORD_RES = [
     for keyword in _SITE_KEYWORDS
 ]
 
+#: The site keywords counted for multi-site claims. A claim mentioning
+#: two distinct sites ("YouTube on ws 3 and ChatGPT on ws 5") needs one
+#: ``launch (action: url)`` per site to be proven.
+_SITE_COUNT_KEYWORDS = [
+    "youtube",
+    "chatgpt",
+    "chat gpt",
+    "openai",
+    "github",
+    "reddit",
+    "netflix",
+    "twitch",
+    "google",
+    "browser",
+    "website",
+    "url",
+]
+
+_SITE_COUNT_RES = [
+    re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
+    for keyword in _SITE_COUNT_KEYWORDS
+]
+
+_PROJECT_KEYWORD_RES = [
+    re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
+    for keyword in ("project", "folder")
+]
+_APP_WORD_RE = re.compile(r"\bapp(?:lication)?s?\b", re.IGNORECASE)
+_TIMER_WORD_RE = re.compile(r"\btimers?\b", re.IGNORECASE)
+_CANCEL_VERB_RE = re.compile(r"\bcancel(?:led|ed|ling|lation)?\b", re.IGNORECASE)
+
 _AUDIT_GENERIC = (
     "[audit] You claimed to have performed an action, but you called no tools "
-    "this turn. Either call the appropriate tool now (e.g. timer_set, open_url, "
-    "play_video, open_project) or say plainly what you can actually do instead. "
+    "this turn. Either call the appropriate tool now (e.g. timer, launch, "
+    "video, start_project) or say plainly what you can actually do instead. "
     "Never claim an action without calling its tool."
 )
 
 
-def _claim_tool_hint(text: str, called_tool_names: list[str]) -> list[str]:
-    """Tool names for action families claimed by ``text`` but never called.
+def _distinct_site_mentions(text: str) -> int:
+    """Number of DISTINCT site keywords mentioned in ``text``.
 
-    Applies the same question/negation guards as the claim detectors; a
-    family contributes its tool names only when none of them were called.
-    Claims mentioning a site (youtube, chatgpt, browser, website, url, ...)
-    additionally require ``open_url`` (or ``play_video``, which opens pages
-    in the browser) — the open verb family alone is not enough.
+    Sizes the launch (action: url) proof against the claim: a claim
+    naming two sites is only proven by one url launch per site.
+    """
+    text = (text or "").casefold()
+    return sum(1 for res in _SITE_COUNT_RES if res.search(text))
+
+
+def _claim_tool_hint(
+    text: str, called_actions: list[tuple[str, str] | str]
+) -> list[str]:
+    """Tool hints for action families claimed by ``text`` but not proven.
+
+    ``called_actions`` are the ``(tool, action)`` pairs recorded while the
+    turn's tool calls executed (a bare tool name counts as no action).
+    Action-aware families require the right action, not just the tool
+    name: play/stream/starting claims need a real video play call (search
+    alone is not enough); open claims need the launch action the claim
+    implies (url for sites, app for apps, project/path for projects);
+    timer claims need the matching set/status/cancel call. Families whose
+    tools have no actions keep the name-level check. Hints carry the
+    expected action as a parenthetical, e.g. "video (action: play)", so
+    the audit message can name both the tool and the action.
     """
     text = (text or "").strip()
     if not text:
@@ -171,41 +235,105 @@ def _claim_tool_hint(text: str, called_tool_names: list[str]) -> list[str]:
         return []
     if _NEGATION_RE.search(text):
         return []
-    called = set(called_tool_names or [])
+    raw_actions = [
+        tuple(item) if isinstance(item, (tuple, list)) else (str(item), None)
+        for item in (called_actions or [])
+    ]
+    called = set(raw_actions)
+    called_names = {name for name, _ in called}
     hints: list[str] = []
-    for verb, tools in _CLAIM_VERB_TOOLS.items():
-        if _CLAIM_VERB_RES[verb].search(text) and not (tools & called):
-            for tool in sorted(tools):
-                if tool not in hints:
-                    hints.append(tool)
-    if _TIME_CLAIM_RE.search(text) and "timer_status" not in called:
-        if "timer_status" not in hints:
-            hints.append("timer_status")
-    site_mention = any(pattern.search(text) for pattern in _SITE_KEYWORD_RES)
-    if site_mention and not ({"open_url", "play_video"} & called):
-        if "open_url" not in hints:
-            hints.append("open_url")
+
+    def add(hint: str) -> None:
+        if hint not in hints:
+            hints.append(hint)
+
+    def any_res(res_list: list[re.Pattern]) -> bool:
+        return any(res.search(text) for res in res_list)
+
+    if any_res(_PLAY_VERB_RES) and not (_VIDEO_PLAY_ACTIONS & called):
+        add("video (action: play)")
+
+    if any_res(_OPEN_VERB_RES):
+        if any_res(_SITE_KEYWORD_RES):
+            if ("launch", "url") not in called and "video" not in called_names:
+                add("launch (action: url)")
+        elif any_res(_PROJECT_KEYWORD_RES):
+            if (
+                not (_LAUNCH_PROJECT_ACTIONS & called)
+                and "start_project" not in called_names
+            ):
+                add("launch (action: project)")
+        elif _APP_WORD_RE.search(text):
+            if ("launch", "app") not in called:
+                add("launch (action: app)")
+        elif not ({"launch", "start_project"} & called_names):
+            add("launch")
+
+    if any_res(_SET_VERB_RES):
+        if _TIMER_WORD_RE.search(text):
+            if ("timer", "set") not in called:
+                add("timer (action: set)")
+        elif not ({"timer", "reminder", "todo"} & called_names):
+            for tool in ("timer", "reminder", "todo"):
+                add(tool)
+
+    if _CANCEL_VERB_RE.search(text) and _TIMER_WORD_RE.search(text):
+        if ("timer", "cancel") not in called:
+            add("timer (action: cancel)")
+
+    if any_res(_NOTIFY_VERB_RES) and not (
+        {"timer", "reminder", "todo"} & called_names
+    ):
+        for tool in ("timer", "reminder", "todo"):
+            add(tool)
+
+    if any_res(_MOVE_VERB_RES) and "workspace" not in called_names:
+        add("workspace")
+
+    if any_res(_CHECK_VERB_RES) and not (
+        {"system_status", "workspace", "timer"} & called_names
+    ):
+        for tool in ("system_status", "workspace", "timer"):
+            add(tool)
+
+    if _TIME_CLAIM_RE.search(text) and ("timer", "status") not in called:
+        add("timer (action: status)")
+
+    site_mention = any_res(_SITE_KEYWORD_RES)
+    if site_mention and "video" not in called_names:
+        url_calls = sum(
+            1 for name, action in raw_actions
+            if name == "launch" and action == "url"
+        )
+        site_count = _distinct_site_mentions(text)
+        if ("launch", "url") not in called:
+            add("launch (action: url)")
+        elif site_count >= 2 and url_calls < site_count:
+            add("launch (action: url)")
+
     return hints
 
 
-def _claims_unsupported_action(text: str, called_tool_names: list[str]) -> bool:
-    """Does ``text`` claim an action whose tools were not called this turn?
+def _claims_unsupported_action(
+    text: str, called_actions: list[tuple[str, str] | str]
+) -> bool:
+    """Does ``text`` claim an action whose (tool, action) calls were not
+    made this turn?
 
-    True either when a claimed verb family has no called tool, or when the
-    text mentions a site keyword without ``open_url`` (or ``play_video``)
-    having been called — the "open" verb family alone does not satisfy a
-    site mention.
+    True either when a claimed verb family has no proving call, or when the
+    text mentions a site keyword without a ``launch url`` (or a ``video``
+    call, which opens pages in the browser) having been made.
     """
-    return bool(_claim_tool_hint(text, called_tool_names))
+    return bool(_claim_tool_hint(text, called_actions))
 
 
 def _detect_claim(
-    text: str, tools_called: bool, called_tool_names: list[str]
+    text: str, tools_called: bool, called_actions: list[tuple[str, str] | str]
 ) -> bool:
     """Pick the right claim detector for the current stage of the turn."""
     if not tools_called:
         return _looks_like_action_claim(text)
-    return _claims_unsupported_action(text, called_tool_names)
+    return _claims_unsupported_action(text, called_actions)
 
 
 def _claim_excerpt(text: str, limit: int = 60) -> str:
@@ -299,54 +427,32 @@ class Agent:
         todos: list | None = None,
         reminders: list | None = None,
     ) -> str:
-        """Persona prompt plus a plain-text injected context block.
+        """Persona prompt plus a compact injected context block.
 
-        Context: local time, relevant durable memories (k=4), open todos
-        (top 5), upcoming reminders (next 3), and a one-line system status
-        (RAM available, VRAM free, load average).
+        Context: local time, top-3 relevant durable memories, and a one-line
+        system status (RAM available, VRAM free, load average). Todos and
+        reminders are left for the model to fetch via tools on demand.
         """
         prompt = build_system_prompt(self.config)
-        if todos is None or reminders is None:
-            fetched = _run_coro(self._fetch_tasks())
-            if fetched:
-                todos, reminders = fetched
-            else:
-                todos, reminders = [], []
+        try:
+            facts = self.store.search_facts(str(user_text), k=3)
+        except Exception:  # noqa: BLE001
+            facts = []
 
         lines = [
             "",
             "# Injected context",
             "",
             f"- Local time: {datetime.now().strftime('%A %Y-%m-%d %H:%M')}",
-        "- You are the assistant project: your own source code lives at "
-        "/mnt/Data/app/assistant (project name 'assistant').",
-        "If the user refers to 'the project where you live / were made / "
-        "'are running from', open that path.",
+            "- You are the assistant project: your own source code lives at "
+            "/mnt/Data/app/assistant (project name 'assistant'). If the user "
+            "refers to 'the project where you live / were made / are running "
+            "from', open that path.",
         ]
-        try:
-            facts = self.store.search_facts(str(user_text), k=4)
-        except Exception:  # noqa: BLE001
-            facts = []
-        if facts:
-            lines.append("")
-            lines.append("Relevant memories (from durable memory):")
-            for fact in facts:
-                lines.append(f"- {str(fact.get('text', '')).strip()}")
-        if todos:
-            lines.append("")
-            lines.append("Open todos:")
-            for todo in todos:
-                title = str(todo.get("title", "")).strip()
-                if title:
-                    lines.append(f"- [{todo.get('id')}] {title}")
-        if reminders:
-            lines.append("")
-            lines.append("Upcoming reminders:")
-            for reminder in reminders:
-                message = str(reminder.get("message", "")).strip()
-                at = str(reminder.get("at", "")).strip()
-                if message:
-                    lines.append(f"- {at}: {message}")
+        for fact in facts:
+            text = str(fact.get("text", "")).strip()
+            if text:
+                lines.append(f"- {text}")
 
         status = system_status()
         ram = status.get("ram") or {}
@@ -357,7 +463,6 @@ class Agent:
         else:
             vram = "no GPU info"
         load_str = "/".join(f"{x:.2f}" for x in load) if load else "n/a"
-        lines.append("")
         lines.append(
             f"System status: {ram.get('avail_mb')} MB RAM available, "
             f"{vram}, load {load_str}."
@@ -447,7 +552,7 @@ class Agent:
         messages.append(user_message(user_text))
 
         tools_called = False
-        called_tool_names: list[str] = []
+        called_actions: list[tuple[str, str]] = []
         for _ in range(_MAX_TOOL_ROUNDS):
             response = await self._chat_with_context_retry(
                 messages, tools=TOOLS.openai_schemas()
@@ -457,16 +562,19 @@ class Agent:
             tool_calls = response.get("tool_calls") or []
             if not tool_calls:
                 final = response.get("content") or ""
-                if not _detect_claim(final, tools_called, called_tool_names):
+                if not _detect_claim(final, tools_called, called_actions):
                     self.session.add_message("assistant", final)
                     return
                 messages.append(assistant_message(final))
                 for audit_round in range(2):
                     if audit_round == 0:
-                        hints = _claim_tool_hint(final, called_tool_names)
+                        hints = _claim_tool_hint(final, called_actions)
+                        # hints carry "(action: ...)" parentheticals, so
+                        # the audit message names both tool and action.
                         audit_text = (
                             "[audit] The user's request needs an action. If "
-                            "you have not called the tool yet, call it now: "
+                            "you have not called the tool yet, call it now "
+                            "(tool and expected action): "
                             f"{', '.join(hints)}. If you already performed it "
                             "via a tool in a previous turn, briefly summarize "
                             "that result. Do not claim an action that no tool "
@@ -492,7 +600,7 @@ class Agent:
                         break
                     final = response.get("content") or ""
                     messages.append(assistant_message(final))
-                    if not _detect_claim(final, tools_called, called_tool_names):
+                    if not _detect_claim(final, tools_called, called_actions):
                         self.session.add_message("assistant", final)
                         return
                 else:
@@ -523,10 +631,11 @@ class Agent:
 
             for tc in tool_calls:
                 name = tc.get("name", "")
-                called_tool_names.append(name)
                 arguments = tc.get("arguments") or {}
                 if not isinstance(arguments, dict):
                     arguments = {}
+                action = str(arguments.get("action") or name)
+                called_actions.append((name, action))
                 self.console.tool(f"{name} {json.dumps(arguments, default=str)[:160]}")
                 ctx = self._context_tools()
                 try:

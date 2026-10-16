@@ -37,6 +37,36 @@ def _error(exc: BaseException) -> dict:
     return {"error": str(exc)}
 
 
+_SITES = {
+    "chatgpt": "https://chatgpt.com",
+    "youtube": "https://www.youtube.com",
+    "github": "https://github.com",
+    "reddit": "https://www.reddit.com",
+    "google": "https://www.google.com",
+    "gmail": "https://mail.google.com",
+    "spotify": "https://open.spotify.com",
+    "wikipedia": "https://en.wikipedia.org",
+    "stackoverflow": "https://stackoverflow.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "amazon": "https://www.amazon.com",
+    "netflix": "https://www.netflix.com",
+    "twitch": "https://www.twitch.tv",
+    "discord": "https://discord.com/app",
+}
+
+
+def _resolve_site_name(url: str) -> str | None:
+    if "://" in url or "/" in url:
+        return None
+    key = url.lower()
+    if key in _SITES:
+        return _SITES[key]
+    if "." not in key and key.replace("-", "").isalpha():
+        return f"https://www.{key}.com"
+    return None
+
+
 # ---------------------------------------------------------------- shell
 
 @TOOLS.register(
@@ -94,113 +124,62 @@ async def _run_shell(ctx, command=None, timeout=120, cwd=None, **extra):
 # ----------------------------------------------------------- app-launch
 
 @TOOLS.register(
-    "open_app",
+    "launch",
     description=(
-        "Launch a desktop application, optionally onto a specific Hyprland "
-        "workspace. Uses an inline windowrule so the user's current workspace "
-        "never loses focus. Use this for launching desktop applications by "
-        "name — not for websites (open_url) and not for videos (play_video). "
-        "Known installed apps include: codium (editor), code, zen (browser), "
-        "firefox, foot (terminal), kitty, mpv (video player), vlc, spotify "
-        "(music player — it IS installed), discord, steam, btop, htop, "
-        "thunar, dolphin, qbittorrent, ani-cli, notify-send. If you are "
-        "unsure whether an app is installed, call it anyway — the tool "
-        "reports clearly when an app is missing. Websites are NOT apps — "
-        "use open_url for sites. To open a project or folder by name, use "
-        "open_project instead."
+        "app — launch an installed application by name (codium, spotify, zen, "
+        "foot, mpv...); url — open a website in the browser, accepts site "
+        "names like 'chatgpt' or full URLs; path — open a file or folder with "
+        "the right app; project — open a project by fuzzy name in the editor. "
+        "Workspace optional; launches never steal focus."
     ),
     category="app-launch",
     params={
-        "app": {
+        "action": {
             "type": "string",
-            "description": "App name (codium, zen, foot, mpv, ...).",
+            "enum": ["app", "url", "path", "project"],
             "required": True,
         },
+        "target": {
+            "type": "string",
+            "description": "App name, URL/site name, path, or project name.",
+            "required": True,
+        },
+        "workspace": {"type": "integer", "description": "Workspace number."},
         "args": {
             "type": "string",
-            "default": "",
-            "description": "Extra command-line arguments.",
-        },
-        "workspace": {
-            "type": "integer",
-            "description": "Workspace number to open the app on.",
-        },
-        "silent": {
-            "type": "boolean",
-            "default": True,
-            "description": "Do not focus the new window.",
+            "description": "Extra command-line arguments (action 'app' only).",
         },
     },
 )
 @_adapt
-async def _open_app(ctx, app=None, args="", workspace=None, silent=True, **extra):
-    if not app or not str(app).strip():
-        return {"error": "app name is required"}
+async def _launch(ctx, action=None, target=None, workspace=None, args="", **extra):
+    if not target or not str(target).strip():
+        return {"error": "target is required"}
+    target = str(target).strip()
     try:
-        return desktop.launch_app(
-            str(app),
-            str(args or ""),
-            workspace=workspace,
-            silent=True,
-            config=ctx.config,
-        )
-    except (desktop.DesktopError, hypr.HyprError) as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "open_path",
-    description=(
-        "Open a file or directory with the right application: xdg-open for "
-        "files, the editor for project folders, Dolphin otherwise. The path "
-        "must already exist."
-    ),
-    category="app-launch",
-    params={
-        "path": {
-            "type": "string",
-            "description": "Filesystem path to open.",
-            "required": True,
-        },
-        "workspace": {"type": "integer", "description": "Workspace number."},
-    },
-)
-@_adapt
-async def _open_path(ctx, path=None, workspace=None, **extra):
-    if not path or not str(path).strip():
-        return {"error": "path is required"}
-    try:
-        return desktop.open_path(str(path), workspace=workspace, config=ctx.config)
-    except (desktop.DesktopError, hypr.HyprError) as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "open_project",
-    description=(
-        "Open a project in the editor, matched by name against the projects "
-        "root, or open an exact path directly. Returns an 'ambiguous' result "
-        "when several projects match. To RUN/start a project use start_project "
-        "instead."
-    ),
-    category="app-launch",
-    params={
-        "name_or_path": {
-            "type": "string",
-            "description": "Project name or exact path.",
-            "required": True,
-        },
-        "workspace": {"type": "integer", "description": "Workspace number."},
-    },
-)
-@_adapt
-async def _open_project(ctx, name_or_path=None, workspace=None, **extra):
-    if not name_or_path or not str(name_or_path).strip():
-        return {"error": "name_or_path is required"}
-    try:
-        return desktop.open_project(
-            str(name_or_path), workspace=workspace, silent=True, config=ctx.config
-        )
+        if action == "app":
+            return desktop.launch_app(
+                target,
+                str(args or ""),
+                workspace=workspace,
+                silent=True,
+                config=ctx.config,
+            )
+        if action == "url":
+            resolved = _resolve_site_name(target)
+            if target == target and resolved is None and "://" not in target and "/" not in target:
+                return {"error": "give a full URL (https://...)"}
+            result = desktop.open_url(resolved or target, workspace, ctx.config)
+            if isinstance(result, dict):
+                result.setdefault(
+                    "note", "opened URL in the browser (no media playback)"
+                )
+            return result
+        if action == "path":
+            return desktop.open_path(target, workspace, ctx.config)
+        if action == "project":
+            return desktop.open_project(target, workspace, ctx.config)
+        return {"error": "unknown action (expected app, url, path or project)"}
     except (desktop.DesktopError, hypr.HyprError) as exc:
         return _error(exc)
 
@@ -248,304 +227,78 @@ async def _start_project(ctx, name_or_path=None, workspace=None, **extra):
     return result
 
 
-@TOOLS.register(
-    "open_url",
-    description=(
-        "Open a URL in the user's web browser, optionally on a specific "
-        "workspace without stealing focus. Accepts a full URL (https://...) "
-        "OR a site name like 'chatgpt', 'youtube', 'github', 'spotify' — "
-        "site names are resolved to their real URL automatically. USE THIS "
-        "whenever the user wants to visit or open a website — not web_search. "
-        "This only opens a page in the browser — it does NOT play media or "
-        "run anything. For YouTube videos, music or lofi streams use "
-        "find_video + play_video instead."
-    ),
-    category="app-launch",
-    params={
-        "url": {
-            "type": "string",
-            "description": "Full URL or a site name (e.g. 'chatgpt', 'youtube').",
-            "required": True,
-        },
-        "workspace": {"type": "integer", "description": "Workspace number."},
-    },
-)
-@_adapt
-async def _open_url(ctx, url=None, workspace=None, **extra):
-    if not url or not str(url).strip():
-        return {"error": "url is required"}
-    url = str(url).strip()
-    resolved = None
-    if "://" not in url and "/" not in url:
-        key = url.lower()
-        known_sites = {
-            "chatgpt": "https://chatgpt.com",
-            "youtube": "https://www.youtube.com",
-            "github": "https://github.com",
-            "reddit": "https://www.reddit.com",
-            "google": "https://www.google.com",
-            "gmail": "https://mail.google.com",
-            "spotify": "https://open.spotify.com",
-            "wikipedia": "https://en.wikipedia.org",
-            "stackoverflow": "https://stackoverflow.com",
-            "twitter": "https://x.com",
-            "x": "https://x.com",
-            "amazon": "https://www.amazon.com",
-            "netflix": "https://www.netflix.com",
-            "twitch": "https://www.twitch.tv",
-            "discord": "https://discord.com/app",
-        }
-        if key in known_sites:
-            resolved = known_sites[key]
-        elif "." not in key and key.replace("-", "").isalpha():
-            resolved = f"https://www.{key}.com"
-        else:
-            return {"error": "give a full URL (https://...)"}
-    try:
-        result = desktop.open_url(
-            resolved or url, workspace=workspace, silent=True, config=ctx.config
-        )
-    except (desktop.DesktopError, hypr.HyprError) as exc:
-        return _error(exc)
-    if isinstance(result, dict):
-        result.setdefault("note", "opened URL in the browser (no media playback)")
-        if resolved:
-            result["note"] = f"opened {resolved} in the browser (no media playback)"
-    return result
-
-
-@TOOLS.register(
-    "play_video",
-    description=(
-        "Actually start playing a video NOW: resolves a URL, YouTube id, or "
-        "search query and opens the watch page in the browser on the given "
-        "workspace (the default player is 'browser'). Only use player='mpv' "
-        "when the user explicitly asks for mpv. Use this when the user wants "
-        "to watch something — after find_video picks a candidate, call "
-        "play_video with its URL or id. Optionally pass workspace to keep "
-        "playback off the user's active workspace. Returns the resolved URL "
-        "and how it was launched. If the user asked to watch something "
-        "without naming an exact video, use the top find_video result and "
-        "call play_video with its URL or id — do not ask the user which one. "
-        "Also the correct tool for YouTube music, lofi streams and "
-        "background audio. Never pass a made-up URL — use a URL/id from "
-        "find_video results or plain search text."
-    ),
-    category="app-launch",
-    params={
-        "video": {
-            "type": "string",
-            "description": "Video URL, YouTube id, or search query.",
-            "required": True,
-        },
-        "player": {
-            "type": "string",
-            "description": "'browser' (default) or 'mpv' (only when the user explicitly asks for mpv).",
-        },
-        "workspace": {"type": "integer", "description": "Workspace number."},
-    },
-)
-@_adapt
-async def _play_video(ctx, video=None, player=None, workspace=None, **extra):
-    if not video or not str(video).strip():
-        return {"error": "video is required"}
-    try:
-        return media.play_video(
-            str(video), player=player or None, workspace=workspace,
-            config=ctx.config,
-        )
-    except (media.MediaError, desktop.DesktopError, hypr.HyprError) as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "ani_play",
-    description=(
-        "Start playing an anime with ani-cli (quality 'best', streaming via "
-        "mpv). select_nth picks the Nth search result when several match; "
-        "episode pins a specific episode. Optionally lands on a workspace. "
-        "Actually starts playback via ani-cli and mpv. When the user asks for the "
-        "latest/next episode, call ani_next first and pass the episode number it "
-        "returns."
-    ),
-    category="app-launch",
-    params={
-        "query": {
-            "type": "string",
-            "description": "Anime title to search for.",
-            "required": True,
-        },
-        "episode": {"type": "integer", "description": "Episode number."},
-        "select_nth": {
-            "type": "integer",
-            "default": 1,
-            "description": "Which search result to play.",
-        },
-        "dub": {
-            "type": "boolean",
-            "default": False,
-            "description": "Prefer the dubbed version.",
-        },
-        "workspace": {"type": "integer", "description": "Workspace number."},
-    },
-)
-@_adapt
-async def _ani_play(
-    ctx, query=None, episode=None, select_nth=1, dub=False, workspace=None, **extra
-):
-    if not query or not str(query).strip():
-        return {"error": "query is required"}
-    try:
-        return media.ani_play(
-            str(query),
-            episode=episode,
-            select_nth=int(select_nth or 1),
-            dub=bool(dub),
-            workspace=workspace,
-            config=ctx.config,
-        )
-    except (media.MediaError, desktop.DesktopError, hypr.HyprError) as exc:
-        return _error(exc)
-
-
 # ------------------------------------------------------------ workspace
 
 @TOOLS.register(
-    "hypr_workspaces",
+    "workspace",
     description=(
-        "List all Hyprland workspaces plus the currently active one. Fails "
-        "with an error when the agent is not inside a Hyprland session."
-    ),
-    category="workspace",
-    params={},
-)
-@_adapt
-async def _hypr_workspaces(ctx, **extra):
-    try:
-        active = hypr.active_workspace()
-    except hypr.HyprError:
-        active = None
-    try:
-        workspaces = hypr.workspaces()
-    except hypr.HyprError as exc:
-        return _error(exc)
-    return {"active": active, "workspaces": workspaces}
-
-
-@TOOLS.register(
-    "hypr_clients",
-    description=(
-        "List all open Hyprland windows with address, class and title. Fails "
-        "with an error outside a Hyprland session."
-    ),
-    category="workspace",
-    params={},
-)
-@_adapt
-async def _hypr_clients(ctx, **extra):
-    try:
-        return {"clients": hypr.clients()}
-    except hypr.HyprError as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "organize_workspaces",
-    description=(
-        "Rearrange Hyprland workspaces per the user's layout: "
-        "editor/terminal windows move to workspaces 1-2, everything else to "
-        "3-5; the currently focused workspace is left alone; moves are "
-        "silent and nothing is ever closed. Returns a summary of what moved."
-    ),
-    category="workspace",
-    params={},
-)
-@_adapt
-async def _organize_workspaces(ctx, **extra):
-    try:
-        return desktop.organize_workspaces(config=ctx.config)
-    except (desktop.DesktopError, hypr.HyprError) as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "move_window",
-    description=(
-        "Move a window (selector like 'address:0x...' or 'class:firefox') to "
-        "a workspace without stealing focus."
+        "list — show workspaces; clients — show windows; move — silently move "
+        "a window (address:0x... or class:...) to a workspace; organize — "
+        "rearrange per the user's layout (editors/terminals → 1-2, everything "
+        "else → 3-5, focused workspace untouched, nothing closed)."
     ),
     category="workspace",
     params={
+        "action": {
+            "type": "string",
+            "enum": ["list", "clients", "move", "organize"],
+            "required": True,
+        },
         "target": {
             "type": "string",
-            "description": "Window selector (address:... or class:...).",
-            "required": True,
+            "description": "Window selector (address:... or class:...) for 'move'.",
         },
         "workspace": {
             "type": "integer",
-            "description": "Destination workspace number.",
-            "required": True,
-        },
-        "silent": {
-            "type": "boolean",
-            "default": True,
-            "description": "Keep focus where it is.",
+            "description": "Destination workspace number for 'move'.",
         },
     },
 )
 @_adapt
-async def _move_window(ctx, target=None, workspace=None, silent=True, **extra):
-    if not target or workspace is None:
-        return {"error": "target and workspace are required"}
+async def _workspace(ctx, action=None, target=None, workspace=None, **extra):
     try:
-        return desktop.move_window(str(target), workspace, silent=bool(silent))
-    except hypr.HyprError as exc:
+        if action == "list":
+            try:
+                active = hypr.active_workspace()
+            except hypr.HyprError:
+                active = None
+            return {"active": active, "workspaces": hypr.workspaces()}
+        if action == "clients":
+            return {"clients": hypr.clients()}
+        if action == "move":
+            if not target or workspace is None:
+                return {"error": "action 'move' requires target and workspace"}
+            return desktop.move_window(str(target), workspace, silent=True)
+        if action == "organize":
+            return desktop.organize_workspaces(config=ctx.config)
+        return {"error": "unknown action (expected list, clients, move or organize)"}
+    except (desktop.DesktopError, hypr.HyprError) as exc:
         return _error(exc)
 
 
 # -------------------------------------------------------------- network
 
 @TOOLS.register(
-    "web_search",
+    "web",
     description=(
-        "Search the web (DuckDuckGo) for information and return result "
-        "titles, URLs and snippets. Use for research, facts and summaries "
-        "— NOT for opening a site the user named (use open_url) and NOT "
-        "for playing media (use find_video + play_video)."
+        "search — search the web (DuckDuckGo) and return titles, URLs and "
+        "snippets; fetch — fetch a URL and return its title and extracted "
+        "plain text."
     ),
     category="network",
     params={
-        "query": {
+        "action": {
             "type": "string",
-            "description": "Search query.",
+            "enum": ["search", "fetch"],
             "required": True,
         },
+        "query": {"type": "string", "description": "Search query."},
+        "url": {"type": "string", "description": "Page URL to fetch."},
         "max_results": {
             "type": "integer",
             "default": 6,
-            "description": "Maximum number of results.",
+            "description": "Maximum number of search results.",
         },
-    },
-)
-@_adapt
-async def _web_search(ctx, query=None, max_results=6, **extra):
-    if not query or not str(query).strip():
-        return {"error": "query is required"}
-    try:
-        return web.search_duckduckgo(str(query), max_results=int(max_results or 6))
-    except web.WebError as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "fetch_page",
-    description=(
-        "Fetch a URL and return its title and extracted plain text (scripts, "
-        "styles and navigation stripped). Truncated to max_chars."
-    ),
-    category="network",
-    params={
-        "url": {"type": "string", "description": "Page URL.", "required": True},
         "max_chars": {
             "type": "integer",
             "default": 8000,
@@ -554,354 +307,326 @@ async def _web_search(ctx, query=None, max_results=6, **extra):
     },
 )
 @_adapt
-async def _fetch_page(ctx, url=None, max_chars=8000, **extra):
-    if not url or not str(url).strip():
-        return {"error": "url is required"}
+async def _web(ctx, action=None, query=None, url=None, max_results=6, max_chars=8000, **extra):
     try:
-        return web.fetch_page(str(url), max_chars=int(max_chars or 8000))
+        if action == "search":
+            if not query or not str(query).strip():
+                return {"error": "action 'search' requires query"}
+            return web.search_duckduckgo(
+                str(query), max_results=int(max_results or 6)
+            )
+        if action == "fetch":
+            if not url or not str(url).strip():
+                return {"error": "action 'fetch' requires url"}
+            return web.fetch_page(str(url), max_chars=int(max_chars or 8000))
+        return {"error": "unknown action (expected search or fetch)"}
     except web.WebError as exc:
         return _error(exc)
 
 
+# ------------------------------------------------------------ app-launch
+
 @TOOLS.register(
-    "find_video",
+    "video",
     description=(
-        "Search YouTube for videos matching a query and return candidates "
-        "(id, title, URL, duration, channel) WITHOUT playing anything. Use "
-        "this to find what to watch, then call play_video with the chosen "
-        "URL/id. (uses the YouTube API when a key is configured in the "
-        "config, otherwise yt-dlp metadata)"
+        "search — find YouTube videos (metadata only); play — actually play a "
+        "URL/id/query (browser by default, mpv only if asked); anime — play "
+        "an anime episode via ani-cli; next_episode — next unwatched episode "
+        "from watch history. When the user wants to watch something: search "
+        "then play, without asking which one."
     ),
-    category="network",
+    category="app-launch",
     params={
-        "query": {
+        "action": {
             "type": "string",
-            "description": "Search query.",
+            "enum": ["search", "play", "anime", "next_episode"],
             "required": True,
         },
-        "max_results": {
-            "type": "integer",
-            "default": 5,
-            "description": "Maximum number of results.",
-        },
-    },
-)
-@_adapt
-async def _find_video(ctx, query=None, max_results=5, **extra):
-    if not query or not str(query).strip():
-        return {"error": "query is required"}
-    try:
-        api_key = getattr(getattr(ctx.config, "web", None), "youtube_api_key", "") or ""
-        return media.yt_search(
-            str(query), max_results=int(max_results or 5), api_key=api_key
-        )
-    except media.MediaError as exc:
-        return _error(exc)
-
-
-@TOOLS.register(
-    "ani_next",
-    description=(
-        "Report the next unwatched episode for an anime from the ani-cli "
-        "watch history. Without a query, returns the whole history."
-    ),
-    category="info",
-    params={
         "query": {
             "type": "string",
-            "description": "Title substring to look up (omit for full history).",
-        }
+            "description": "Search query / anime title.",
+        },
+        "video": {
+            "type": "string",
+            "description": "Video URL, YouTube id, or search text for 'play'.",
+        },
+        "player": {
+            "type": "string",
+            "description": "'browser' (default) or 'mpv' (only when the user explicitly asks).",
+        },
+        "episode": {"type": "integer", "description": "Episode number."},
+        "select_nth": {
+            "type": "integer",
+            "description": "Which anime search result to play.",
+        },
+        "dub": {"type": "boolean", "description": "Prefer the dubbed version."},
+        "workspace": {"type": "integer", "description": "Workspace number."},
     },
 )
 @_adapt
-async def _ani_next(ctx, query=None, **extra):
+async def _video(
+    ctx,
+    action=None,
+    query=None,
+    video=None,
+    player=None,
+    episode=None,
+    select_nth=1,
+    dub=False,
+    workspace=None,
+    **extra,
+):
     try:
-        return media.ani_next(query=str(query) if query else None, config=ctx.config)
-    except media.MediaError as exc:
+        if action == "search":
+            if not query or not str(query).strip():
+                return {"error": "action 'search' requires query"}
+            api_key = (
+                getattr(getattr(ctx.config, "web", None), "youtube_api_key", "") or ""
+            )
+            return media.yt_search(str(query), api_key=api_key)
+        if action == "play":
+            if not video or not str(video).strip():
+                return {"error": "action 'play' requires video"}
+            return media.play_video(
+                str(video), player=player or None, workspace=workspace,
+                config=ctx.config,
+            )
+        if action == "anime":
+            if not query or not str(query).strip():
+                return {"error": "action 'anime' requires query"}
+            return media.ani_play(
+                str(query),
+                episode=episode,
+                select_nth=int(select_nth or 1),
+                dub=bool(dub),
+                workspace=workspace,
+                config=ctx.config,
+            )
+        if action == "next_episode":
+            return media.ani_next(
+                query=str(query) if query else None, config=ctx.config
+            )
+        return {
+            "error": "unknown action (expected search, play, anime or next_episode)"
+        }
+    except (media.MediaError, desktop.DesktopError, hypr.HyprError) as exc:
         return _error(exc)
 
 
 # -------------------------------------------------------------- memory
 
 @TOOLS.register(
-    "memory_add",
+    "memory",
     description=(
-        "Store a durable fact about the user, their projects or preferences "
-        "in local memory. Use for preferences, recurring decisions, dislikes."
+        "add — store a durable fact about the user (preferences, projects, "
+        "decisions); recall — search memory for facts related to a query; "
+        "list — list stored facts newest first, optionally by kind; delete — "
+        "delete a fact by id or text match (needs approval)."
     ),
     category="memory",
     params={
-        "fact": {
+        "action": {
             "type": "string",
-            "description": "The fact to remember.",
+            "enum": ["add", "recall", "list", "delete"],
             "required": True,
+        },
+        "fact": {"type": "string", "description": "The fact to remember."},
+        "query": {
+            "type": "string",
+            "description": "What to search for / text match to delete.",
         },
         "kind": {
             "type": "string",
-            "default": "fact",
             "description": "Category: fact, preference, project, ...",
+        },
+        "fact_id": {"type": "integer", "description": "Fact id to delete."},
+        "k": {
+            "type": "integer",
+            "default": 5,
+            "description": "Maximum number of recall matches.",
+        },
+        "limit": {
+            "type": "integer",
+            "default": 20,
+            "description": "Maximum number of facts to list.",
         },
         "confidence": {
             "type": "number",
-            "default": 1.0,
             "description": "How sure you are (0-1).",
         },
     },
 )
 @_adapt
-async def _memory_add(ctx, fact=None, kind="fact", confidence=1.0, **extra):
-    if not fact or not str(fact).strip():
-        return {"error": "fact is required"}
-    return await memory_tools.memory_add(
-        ctx, str(fact), kind=str(kind or "fact"), confidence=float(confidence or 1.0)
-    )
-
-
-@TOOLS.register(
-    "memory_recall",
-    description=(
-        "Search durable memory for facts related to a query. Recall before "
-        "answering questions about user preferences, projects or past asks."
-    ),
-    category="memory",
-    params={
-        "query": {
-            "type": "string",
-            "description": "What to search for.",
-            "required": True,
-        },
-        "k": {
-            "type": "integer",
-            "default": 5,
-            "description": "Maximum number of matches.",
-        },
-    },
-)
-@_adapt
-async def _memory_recall(ctx, query=None, k=5, **extra):
-    if not query or not str(query).strip():
-        return {"error": "query is required"}
-    return await memory_tools.memory_recall(ctx, str(query), k=int(k or 5))
-
-
-@TOOLS.register(
-    "memory_list",
-    description=(
-        "List stored facts, newest first, optionally filtered by kind "
-        "(e.g. 'preference')."
-    ),
-    category="memory",
-    params={
-        "limit": {
-            "type": "integer",
-            "default": 20,
-            "description": "Maximum number of facts.",
-        },
-        "kind": {"type": "string", "description": "Only this kind of fact."},
-    },
-)
-@_adapt
-async def _memory_list(ctx, limit=20, kind=None, **extra):
-    return await memory_tools.memory_list(
-        ctx, limit=int(limit or 20), kind=str(kind) if kind else None
-    )
-
-
-@TOOLS.register(
-    "memory_delete",
-    description=(
-        "Delete a stored fact by id or by text match. Deleting memories "
-        "requires the user's approval."
-    ),
-    category="memory",
-    params={
-        "fact_id": {"type": "integer", "description": "Fact id to delete."},
-        "query": {
-            "type": "string",
-            "description": "Text match — deletes facts containing it.",
-        },
-    },
-)
-@_adapt
-async def _memory_delete(ctx, fact_id=None, query=None, **extra):
-    return await memory_tools.memory_delete(
-        ctx, fact_id=fact_id, query=str(query) if query else None
-    )
+async def _memory(
+    ctx,
+    action=None,
+    fact=None,
+    query=None,
+    kind=None,
+    fact_id=None,
+    k=5,
+    limit=20,
+    confidence=1.0,
+    **extra,
+):
+    if action == "add":
+        if not fact or not str(fact).strip():
+            return {"error": "action 'add' requires fact"}
+        return await memory_tools.memory_add(
+            ctx,
+            str(fact),
+            kind=str(kind or "fact"),
+            confidence=float(confidence or 1.0),
+        )
+    if action == "recall":
+        if not query or not str(query).strip():
+            return {"error": "action 'recall' requires query"}
+        return await memory_tools.memory_recall(ctx, str(query), k=int(k or 5))
+    if action == "list":
+        return await memory_tools.memory_list(
+            ctx, limit=int(limit or 20), kind=str(kind) if kind else None
+        )
+    if action == "delete":
+        if fact_id is None and not query:
+            return {"error": "action 'delete' requires fact_id or query"}
+        return await memory_tools.memory_delete(
+            ctx, fact_id=fact_id, query=str(query) if query else None
+        )
+    return {"error": "unknown action (expected add, recall, list or delete)"}
 
 
 # --------------------------------------------------------------- tasks
 
 @TOOLS.register(
-    "todo_add",
-    description="Add an open todo to the persistent todo list.",
+    "todo",
+    description=(
+        "add — add an open todo to the persistent list; list — list todos "
+        "(open by default, include_done shows all); toggle — toggle or set "
+        "the done state of a todo by id or title text."
+    ),
     category="tasks",
     params={
-        "title": {
+        "action": {
             "type": "string",
-            "description": "Todo text.",
+            "enum": ["add", "list", "toggle"],
             "required": True,
-        }
-    },
-)
-@_adapt
-async def _todo_add(ctx, title=None, **extra):
-    return await tasks.todo_add(ctx, str(title or ""))
-
-
-@TOOLS.register(
-    "todo_list",
-    description="List todos (open ones by default; include_done shows all).",
-    category="tasks",
-    params={
+        },
+        "title": {"type": "string", "description": "Todo text."},
+        "query": {"type": "string", "description": "Title text to match."},
+        "todo_id": {"type": "integer", "description": "Todo id."},
         "include_done": {
             "type": "boolean",
             "default": False,
             "description": "Also show completed todos.",
-        }
-    },
-)
-@_adapt
-async def _todo_list(ctx, include_done=False, **extra):
-    return await tasks.todo_list(ctx, include_done=bool(include_done))
-
-
-@TOOLS.register(
-    "todo_toggle",
-    description=(
-        "Toggle (or explicitly set) the done state of a todo, found by id or "
-        "by a text match on its title."
-    ),
-    category="tasks",
-    params={
-        "todo_id": {"type": "integer", "description": "Todo id."},
-        "query": {"type": "string", "description": "Title text to match."},
+        },
         "done": {"type": "boolean", "description": "Force done/not done."},
     },
 )
 @_adapt
-async def _todo_toggle(ctx, todo_id=None, query=None, done=None, **extra):
-    return await tasks.todo_toggle(
-        ctx, todo_id=todo_id, query=str(query) if query else None, done=done
-    )
+async def _todo(
+    ctx, action=None, title=None, query=None, todo_id=None,
+    include_done=False, done=None, **extra,
+):
+    if action == "add":
+        if not title or not str(title).strip():
+            return {"error": "action 'add' requires title"}
+        return await tasks.todo_add(ctx, str(title))
+    if action == "list":
+        return await tasks.todo_list(ctx, include_done=bool(include_done))
+    if action == "toggle":
+        if todo_id is None and not query:
+            return {"error": "action 'toggle' requires todo_id or query"}
+        return await tasks.todo_toggle(
+            ctx,
+            todo_id=todo_id,
+            query=str(query) if query else None,
+            done=done,
+        )
+    return {"error": "unknown action (expected add, list or toggle)"}
 
 
 @TOOLS.register(
-    "reminder_add",
+    "reminder",
     description=(
-        "Schedule a reminder. 'when' accepts expressions like 'in 30m', "
-        "'in 1h30m', 'at 18:30', 'tomorrow' or 'tomorrow 9am'."
+        "add — schedule a reminder ('in 30m', 'at 18:30', 'tomorrow 9am'); "
+        "list — list scheduled reminders, soonest first; cancel — cancel a "
+        "reminder by id."
     ),
     category="tasks",
     params={
-        "message": {
+        "action": {
             "type": "string",
-            "description": "Reminder text.",
+            "enum": ["add", "list", "cancel"],
             "required": True,
         },
-        "when": {
-            "type": "string",
-            "description": "Human time expression.",
-            "required": True,
-        },
+        "message": {"type": "string", "description": "Reminder text."},
+        "when": {"type": "string", "description": "Human time expression."},
+        "reminder_id": {"type": "integer", "description": "Reminder id."},
     },
 )
 @_adapt
-async def _reminder_add(ctx, message=None, when=None, **extra):
-    return await tasks.reminder_add(ctx, str(message or ""), str(when or ""))
+async def _reminder(
+    ctx, action=None, message=None, when=None, reminder_id=None, **extra
+):
+    if action == "add":
+        if not message or not when:
+            return {"error": "action 'add' requires message and when"}
+        return await tasks.reminder_add(ctx, str(message), str(when))
+    if action == "list":
+        return await tasks.reminder_list(ctx)
+    if action == "cancel":
+        if reminder_id is None:
+            return {"error": "action 'cancel' requires reminder_id"}
+        return await tasks.reminder_cancel(ctx, int(reminder_id))
+    return {"error": "unknown action (expected add, list or cancel)"}
 
 
 @TOOLS.register(
-    "reminder_list",
-    description="List scheduled reminders, soonest first.",
-    category="tasks",
-    params={},
-)
-@_adapt
-async def _reminder_list(ctx, **extra):
-    return await tasks.reminder_list(ctx)
-
-
-@TOOLS.register(
-    "reminder_cancel",
-    description="Cancel a scheduled reminder by id.",
-    category="tasks",
-    params={
-        "reminder_id": {
-            "type": "integer",
-            "description": "Reminder id.",
-            "required": True,
-        }
-    },
-)
-@_adapt
-async def _reminder_cancel(ctx, reminder_id=None, **extra):
-    if reminder_id is None:
-        return {"error": "reminder_id is required"}
-    return await tasks.reminder_cancel(ctx, int(reminder_id))
-
-
-@TOOLS.register(
-    "timer_set",
+    "timer",
     description=(
-        "Start a countdown timer (this machine has no stopwatch app — this IS "
-        "the stopwatch). Accepts '20m', '20 minutes', '2h', '1h30m', '90s', "
-        "'1:30', or 'in 20m'. You'll be notified when it ends; the user can "
-        "ask for the remaining time anytime."
+        "set — start a countdown timer ('20m', '1h30m', '90s', '1:30'); "
+        "status — report remaining time on all running timers; cancel — "
+        "cancel a timer by id, or the only running one when omitted."
     ),
     category="tasks",
     params={
-        "label": {
+        "action": {
             "type": "string",
-            "default": "timer",
-            "description": "Timer label.",
+            "enum": ["set", "status", "cancel"],
+            "required": True,
         },
+        "label": {"type": "string", "description": "Timer label."},
         "duration": {
             "type": "string",
             "description": "Countdown duration (e.g. '20m', '1h30m', '90s').",
-            "required": True,
+        },
+        "timer_id": {
+            "type": "integer",
+            "description": "Timer id to cancel.",
         },
     },
 )
 @_adapt
-async def _timer_set(ctx, label="timer", duration=None, **extra):
-    if duration is None:
-        return {"error": "duration is required"}
-    return await tasks.timer_set(ctx, label=str(label or "timer"), duration=str(duration))
-
-
-@TOOLS.register(
-    "timer_status",
-    description="Report remaining time on all running timers (the stopwatch readout).",
-    category="tasks",
-    params={},
-)
-@_adapt
-async def _timer_status(ctx, **extra):
-    return await tasks.timer_status(ctx)
-
-
-@TOOLS.register(
-    "timer_cancel",
-    description="Cancel a timer by id, or omit to cancel the only running timer.",
-    category="tasks",
-    params={
-        "timer_id": {
-            "type": "integer",
-            "description": "Timer id to cancel; omit to cancel the only running timer.",
-        }
-    },
-)
-@_adapt
-async def _timer_cancel(ctx, timer_id=None, **extra):
-    if timer_id is None:
-        return await tasks.timer_cancel(ctx)
-    return await tasks.timer_cancel(ctx, int(timer_id))
+async def _timer(ctx, action=None, label="timer", duration=None, timer_id=None, **extra):
+    if action == "set":
+        if duration is None:
+            return {"error": "action 'set' requires duration"}
+        return await tasks.timer_set(
+            ctx, label=str(label or "timer"), duration=str(duration)
+        )
+    if action == "status":
+        return await tasks.timer_status(ctx)
+    if action == "cancel":
+        if timer_id is None:
+            return await tasks.timer_cancel(ctx)
+        return await tasks.timer_cancel(ctx, int(timer_id))
+    return {"error": "unknown action (expected set, status or cancel)"}
 
 
 # ---------------------------------------------------------------- info
 
 @TOOLS.register(
-    "notify_user",
+    "notify",
     description="Pop a desktop toast notification addressed to the user.",
     category="info",
     params={
@@ -913,7 +638,7 @@ async def _timer_cancel(ctx, timer_id=None, **extra):
     },
 )
 @_adapt
-async def _notify_user(ctx, message=None, **extra):
+async def _notify(ctx, message=None, **extra):
     if not message or not str(message).strip():
         return {"error": "message is required"}
     return await notify.notify_user(ctx, str(message))

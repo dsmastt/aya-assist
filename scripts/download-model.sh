@@ -2,6 +2,11 @@
 # Download a GGUF model with resume support.
 #
 # Usage: download-model.sh [URL] [DEST_FILENAME]
+#
+# Qwen3-8B-Instruct Q4_K_M preset (A/B test candidate):
+#   ./scripts/download-model.sh \
+#     "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf" \
+#     Qwen3-8B-Instruct-Q4_K_M.gguf
 set -euo pipefail
 
 MODEL_URL="${1:-https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf}"

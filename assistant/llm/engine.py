@@ -49,6 +49,18 @@ MODEL_PRESETS: dict[str, dict] = {
         ),
         "min_vram_mb": 6200,
     },
+    "qwen3-8b-instruct-q4_k_m": {
+        "file": "Qwen3-8B-Instruct-Q4_K_M.gguf",
+        "url": (
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/"
+            "resolve/main/Qwen3-8B-Q4_K_M.gguf"
+        ),
+        "notes": (
+            "Qwen3-8B-Instruct Q4_K_M, ~5.0 GB (5,027,783,488 bytes); stronger "
+            "instruction/tool following than Qwen2.5-7B at similar VRAM"
+        ),
+        "min_vram_mb": 6400,
+    },
 }
 
 

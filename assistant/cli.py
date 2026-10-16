@@ -6,6 +6,7 @@ Subcommands:
 - ``assist chat "message..."`` — one-shot, non-interactive turn
 - ``assist status`` — system + model status, no load
 - ``assist setup`` — create config dirs, print config path and hints
+- ``assist selftest`` — self-test battery (launches real apps)
 
 The model is loaded lazily on the first user message (RAM friendly), never
 at startup.
@@ -459,6 +460,9 @@ def _build_parser() -> argparse.ArgumentParser:
     chat.add_argument("message", nargs="+", help="message text to send")
     sub.add_parser("status", help="print system and model status (no model load)")
     sub.add_parser("setup", help="create config dirs and a default config")
+    sub.add_parser(
+        "selftest", help="run the self-test verification battery (launches real apps)"
+    )
     service_parser = sub.add_parser(
         "service", help="manage the background timers/reminders service"
     )
@@ -474,6 +478,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``assist`` console script."""
+    if argv is None:
+        argv = sys.argv[1:]
+    # ``selftest`` parses its own arguments (--scenario/--list/--json),
+    # which argparse subparsers cannot forward faithfully.
+    if argv and argv[0] == "selftest":
+        from assistant.selftest import main as selftest_main
+
+        return selftest_main(argv[1:])
     args = _build_parser().parse_args(argv)
     command = args.command or "repl"
     try:

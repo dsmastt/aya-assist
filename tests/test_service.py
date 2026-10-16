@@ -89,7 +89,7 @@ class NotifyPathTest(unittest.TestCase):
 
 
 class AgentTimeClaimTest(unittest.TestCase):
-    def test_time_remaining_patterns_hint_timer_status(self):
+    def test_time_remaining_patterns_hint_timer(self):
         for text in (
             "The timer has 29 minutes left",
             "it has 5 minutes remaining",
@@ -99,7 +99,8 @@ class AgentTimeClaimTest(unittest.TestCase):
             "elapsed time so far is 2 minutes",
             "the timer status looks fine",
         ):
-            self.assertIn("timer_status", _claim_tool_hint(text, []), text)
+            hints = _claim_tool_hint(text, [])
+            self.assertTrue(any("timer" in hint for hint in hints), text)
 
     def test_plain_fact_gets_no_hint(self):
         self.assertEqual(_claim_tool_hint("Paris is the capital", []), [])

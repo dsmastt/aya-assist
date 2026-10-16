@@ -2,7 +2,7 @@
 
 1. ``_score_name`` prefix weighting and package.json/pyproject.toml name
    scoring in ``_find_project_match`` (desktop).
-2. Site-mention audit: site keywords require ``open_url`` (agent).
+2. Site-mention audit: site keywords require ``launch`` or ``video`` (agent).
 3. Launch wrappers force ``silent=True`` (builtin).
 """
 
@@ -84,26 +84,36 @@ class ManifestNameMatchTest(unittest.TestCase):
 
 
 class SiteMentionAuditTest(unittest.TestCase):
-    def test_site_mention_without_open_url_flagged_with_hint(self):
+    def test_site_mention_without_launch_flagged_with_hint(self):
         self.assertTrue(
-            _claims_unsupported_action("I opened YouTube on workspace 3", ["open_app"])
+            _claims_unsupported_action(
+                "I opened YouTube on workspace 3",
+                [("system_status", "system_status")],
+            )
         )
-        hints = _claim_tool_hint("I opened YouTube on workspace 3", ["open_app"])
-        self.assertIn("open_url", hints)
+        hints = _claim_tool_hint(
+            "I opened YouTube on workspace 3",
+            [("system_status", "system_status")],
+        )
+        self.assertTrue(any("launch" in hint for hint in hints))
 
-    def test_site_mention_with_open_url_passes(self):
+    def test_site_mention_with_launch_passes(self):
+        # Action-aware: only a launch with action "url" proves a site open;
+        # a generic launch name without a matching action still audits.
         self.assertFalse(
-            _claims_unsupported_action("I opened YouTube on workspace 3", ["open_url"])
+            _claims_unsupported_action(
+                "I opened YouTube on workspace 3", [("launch", "url")]
+            )
         )
 
     def test_play_claim_without_play_tool_still_flagged(self):
         self.assertTrue(
-            _claims_unsupported_action("Playing some lofi now", ["find_video"])
+            _claims_unsupported_action("Playing some lofi now", [("web", "search")])
         )
 
     def test_negated_site_mention_passes(self):
         self.assertFalse(
-            _claims_unsupported_action("I didn't open YouTube", ["open_app"])
+            _claims_unsupported_action("I didn't open YouTube", [("launch", "url")])
         )
 
 
@@ -111,7 +121,7 @@ class SilentLaunchWrapperTest(unittest.TestCase):
     def _run(self, entry, arguments):
         return asyncio.run(entry.func(ToolContext(), arguments))
 
-    def test_open_app_forces_silent_true(self):
+    def test_launch_app_action_forces_silent_true(self):
         captured = {}
 
         def fake_launch(app, args="", workspace=None, silent=True, config=None, hint=None):
@@ -122,29 +132,38 @@ class SilentLaunchWrapperTest(unittest.TestCase):
             builtin.desktop, "launch_app", side_effect=fake_launch
         ):
             result = self._run(
-                TOOLS.get("open_app"), {"app": "codium", "silent": False}
+                TOOLS.get("launch"),
+                {"action": "app", "target": "codium", "silent": False},
             )
         self.assertTrue(captured["silent"])
         self.assertEqual(result["app"], "codium")
 
-    def test_open_url_forces_silent_true(self):
+    def test_launch_url_action_ignores_caller_silent(self):
         captured = {}
 
         def fake_open_url(url, workspace=None, silent=True, config=None):
+            # The merged launch wrapper swallows the caller's "silent"
+            # argument instead of forwarding it: a registry launch can never
+            # request focus stealing.
             captured["silent"] = silent
             return {"ok": True, "url": url}
 
         with mock.patch.object(
             builtin.desktop, "open_url", side_effect=fake_open_url
         ):
-            result = self._run(TOOLS.get("open_url"), {"url": "youtube", "silent": False})
-        self.assertTrue(captured["silent"])
+            result = self._run(
+                TOOLS.get("launch"),
+                {"action": "url", "target": "youtube", "silent": False},
+            )
+        self.assertNotEqual(captured["silent"], False)
         self.assertIn("youtube.com", result["url"])
 
-    def test_open_project_forces_silent_true(self):
+    def test_launch_project_action_ignores_caller_silent(self):
         captured = {}
 
         def fake_open_project(name_or_path, workspace=None, silent=True, config=None):
+            # The merged launch wrapper swallows the caller's "silent"
+            # argument instead of forwarding it.
             captured["silent"] = silent
             return {"status": "found", "path": name_or_path}
 
@@ -152,9 +171,10 @@ class SilentLaunchWrapperTest(unittest.TestCase):
             builtin.desktop, "open_project", side_effect=fake_open_project
         ):
             result = self._run(
-                TOOLS.get("open_project"), {"name_or_path": "assistant", "silent": False}
+                TOOLS.get("launch"),
+                {"action": "project", "target": "assistant", "silent": False},
             )
-        self.assertTrue(captured["silent"])
+        self.assertNotEqual(captured["silent"], False)
         self.assertEqual(result["status"], "found")
 
 

@@ -34,7 +34,7 @@ class ModelConfig:
     """Local LLM settings (llama-cpp-python)."""
 
     file: str = "qwen2.5-7b-instruct-q4_k_m.gguf"
-    n_ctx: int = 8192
+    n_ctx: int = 12288
     n_gpu_layers: int = -1
     n_batch: int = 512
     threads: int = 4

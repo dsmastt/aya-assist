@@ -13,6 +13,7 @@ assist repl               same, explicitly
 assist chat "message..."  one-shot, non-interactive turn
 assist status             system + model status (no model load)
 assist setup              create config dirs / default config
+assist selftest           self-test battery (launches real apps)
 ```
 
 The model is **not** loaded at startup. It loads lazily on your first
@@ -67,6 +68,35 @@ Want me to play it, or are you just curious? 😼
 - mpv needs yt-dlp on Hyprland's PATH to play YouTube streams when launched
   on a workspace; `scripts/install.sh` links `~/.local/bin/yt-dlp` to the
   venv copy for this.
+
+## Self-test battery
+
+`assist selftest` runs a repeatable verification battery: 12 scenarios, each
+an independent `assist chat` process, checked against real desktop state —
+tool lines extracted from the transcript (must appear in the expected
+order) plus side-effect checks on Hyprland windows, processes, timers, the
+memory DB and the tasks state file. Scenarios cover app/site launches
+(codium, spotify, youtube/chatgpt), video search+play, `start_project`,
+workspace organizing, timer set/cancel, memory add/recall, web search, a
+15-second reminder (needs the background service; skipped with a note
+otherwise), a safe shell command plus a refused `systemctl reboot`, and a
+plain greeting that must not trigger the audit warning.
+
+```
+assist selftest                    run every scenario
+assist selftest --scenario 1       run one scenario (repeatable)
+assist selftest --scenario 1 --scenario 7
+assist selftest --list             print the scenario ids
+assist selftest --json out.json    also write machine-readable results
+```
+
+Exit code is 0 when every scenario passes, 1 otherwise. Each run gets a
+240 s timeout; evidence (per-run transcripts, tool lines, answer tails,
+state snapshots) lands in a fresh `/tmp/assist-selftest-*` directory.
+
+**Warning:** the battery launches real applications and leaves them
+running, and it needs the model and a Hyprland desktop session to verify
+anything meaningful.
 
 ## Memory
 

@@ -110,17 +110,18 @@ class OrganizeWorkspacesTest(unittest.TestCase):
 
 
 class OrganizeWorkspacesRegistrationTest(unittest.TestCase):
-    def test_tool_registered_in_workspace_category(self):
-        entry = TOOLS.get("organize_workspaces")
+    def test_workspace_tool_registered_in_workspace_category(self):
+        entry = TOOLS.get("workspace")
         self.assertIsNotNone(entry)
         self.assertEqual(entry.category, "workspace")
 
-    def test_schema_has_no_params(self):
+    def test_organize_action_needs_no_params_beyond_action(self):
         schema = {
             f["function"]["name"]: f["function"] for f in TOOLS.openai_schemas()
-        }["organize_workspaces"]
-        self.assertEqual(schema["parameters"]["properties"], {})
-        self.assertNotIn("required", schema["parameters"])
+        }["workspace"]
+        props = schema["parameters"]["properties"]
+        self.assertIn("organize", props["action"]["enum"])
+        self.assertEqual(schema["parameters"]["required"], ["action"])
 
 
 if __name__ == "__main__":
